@@ -85,8 +85,33 @@ const Notification = sequelize.define('notifications', {
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   user_id: DataTypes.UUID,
   type: DataTypes.STRING,
+  channel: { type: DataTypes.ENUM('email', 'sms', 'push'), defaultValue: 'email' },
   message: DataTypes.STRING,
+  status: { type: DataTypes.ENUM('queued', 'sent', 'failed', 'retried'), defaultValue: 'queued' },
+  attempts: { type: DataTypes.INTEGER, defaultValue: 0 },
+  provider_message_id: DataTypes.STRING,
+  failure_reason: DataTypes.STRING,
+  sent_at: DataTypes.DATE,
   read_at: DataTypes.DATE,
+  metadata: DataTypes.JSON,
+}, { underscored: true });
+
+
+const GuardianLink = sequelize.define('guardian_links', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  student_id: DataTypes.UUID,
+  guardian_id: DataTypes.UUID,
+  relationship: DataTypes.STRING,
+  can_receive_notifications: { type: DataTypes.BOOLEAN, defaultValue: true },
+  linked_by: DataTypes.UUID,
+}, { underscored: true });
+
+const NotificationPreference = sequelize.define('notification_preferences', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  user_id: DataTypes.UUID,
+  channel: { type: DataTypes.ENUM('email', 'sms', 'push'), allowNull: false },
+  opted_in: { type: DataTypes.BOOLEAN, defaultValue: true },
+  priority: { type: DataTypes.INTEGER, defaultValue: 1 },
 }, { underscored: true });
 
 const AuditLog = sequelize.define('audit_logs', {
@@ -111,5 +136,8 @@ ClassSession.belongsTo(Class, { foreignKey: 'class_id' });
 AttendanceRecord.belongsTo(ClassSession, { foreignKey: 'class_session_id' });
 AttendanceRecord.belongsTo(User, { foreignKey: 'student_id', as: 'student' });
 LeaveRequest.belongsTo(User, { foreignKey: 'student_id', as: 'student' });
+GuardianLink.belongsTo(User, { foreignKey: 'student_id', as: 'student' });
+GuardianLink.belongsTo(User, { foreignKey: 'guardian_id', as: 'guardian' });
+NotificationPreference.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
-module.exports = { sequelize, User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, Notification, AuditLog };
+module.exports = { sequelize, User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, Notification, GuardianLink, NotificationPreference, AuditLog };
