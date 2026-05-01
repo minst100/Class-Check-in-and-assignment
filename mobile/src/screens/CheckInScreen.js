@@ -3,8 +3,8 @@ import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react
 import { BarCodeScanner } from 'expo-barcode-scanner';
 import * as Location from 'expo-location';
 import { useLanguage } from '../context/LanguageContext';
-import { getPrivacySafeFingerprint } from '../services/fingerprint';
 import { addToQueue, getQueue, syncQueue } from '../services/syncQueue';
+import { buildVerificationPayload } from '../hooks/useVerificationPayload';
 
 export default function CheckInScreen() {
   const { t } = useLanguage();
@@ -39,10 +39,8 @@ export default function CheckInScreen() {
 
     await addToQueue({
       type,
-      token,
-      location,
+      ...buildVerificationPayload({ token, location, biometricResult: null }),
       clientVersion: Date.now(),
-      fingerprint: getPrivacySafeFingerprint(),
       createdAt: new Date().toISOString()
     });
     setToken('');
@@ -85,7 +83,7 @@ export default function CheckInScreen() {
         renderItem={({ item }) => (
           <View style={styles.item}>
             <Text style={styles.itemText}>{item.type} • {item.createdAt}</Text>
-            <Text style={styles.itemSub}>{item.status || 'pending'} | {item.fingerprint?.signalId}</Text>
+            <Text style={styles.itemSub}>{item.status || 'pending'} | {item.fingerprint?.signalId} | {item.verification_meta?.local_biometric_only ? 'local-biometric' : 'no-biometric'}</Text>
           </View>
         )}
       />

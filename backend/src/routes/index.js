@@ -1,9 +1,10 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { v4: uuid } = require('uuid');
 const { auth, authorize } = require('../middleware/auth');
 const { User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight } = require('../models');
 const { logAction } = require('../services/audit');
+const { signSessionToken } = require('../verification/token');
+const { verifyCheckIn, auditVerificationDecision } = require('../verification');
 
 const router = express.Router();
 
@@ -32,18 +33,58 @@ router.post('/classes/:id/sessions/recurring', auth, authorize('admin', 'teacher
   res.status(201).json(s);
 });
 router.post('/sessions/:id/open', auth, authorize('admin', 'teacher'), async (req, res) => {
-  const s = await ClassSession.findByPk(req.params.id); const token = uuid(); await s.update({ status: 'open', one_time_token: token });
-  await logAction(req.user.sub, 'session_open', 'class_session', s.id, { token }); res.json({ ...s.toJSON(), qr_session_id: token });
+  const s = await ClassSession.findByPk(req.params.id);
+  const token = signSessionToken(s.id);
+  const tokenExpiresAt = new Date(Date.now() + 120000);
+  await s.update({
+    status: 'open',
+    one_time_token: token,
+    token_expires_at: tokenExpiresAt,
+    opens_at: s.opens_at || s.starts_at,
+    closes_at: s.closes_at || s.ends_at
+  });
+  await logAction(req.user.sub, 'session_open', 'class_session', s.id, { token_expires_at: tokenExpiresAt });
+  res.json({ ...s.toJSON(), qr_payload: token, token_expires_at: tokenExpiresAt });
 });
 router.post('/sessions/:id/close', auth, authorize('admin', 'teacher'), async (req, res) => { const s = await ClassSession.findByPk(req.params.id); await s.update({ status: 'closed' }); await logAction(req.user.sub, 'session_close', 'class_session', s.id); res.json(s); });
 
 router.post('/sessions/:id/check-in', auth, authorize('student'), async (req, res) => {
   const s = await ClassSession.findByPk(req.params.id);
-  if (!s || s.status !== 'open' || s.one_time_token !== req.body.one_time_token) return res.status(400).json({ error: 'Session unavailable' });
-  const lateThreshold = new Date(new Date(s.starts_at).getTime() + s.grace_minutes * 60000);
   const now = new Date();
-  const status = now > lateThreshold ? 'late' : 'present';
-  const rec = await AttendanceRecord.create({ class_session_id: s.id, student_id: req.user.sub, checked_in_at: now, status, verification_meta: req.body.verification_meta, location_snapshot: req.body.location || null });
+  const decision = await verifyCheckIn({
+    session: s,
+    studentId: req.user.sub,
+    oneTimeToken: req.body.one_time_token,
+    location: req.body.location,
+    fingerprint: req.body.fingerprint,
+    biometricResult: req.body.biometric_result,
+    now
+  });
+
+  await auditVerificationDecision({
+    actorUserId: req.user.sub,
+    sessionId: s ? s.id : null,
+    decision,
+    metadata: { location: req.body.location || null, fingerprint: req.body.fingerprint || null }
+  });
+
+  if (!decision.ok) return res.status(400).json({ error: 'Verification failed', reason_code: decision.reasonCode, anomalies: decision.anomalies || [] });
+
+  const rec = await AttendanceRecord.create({
+    class_session_id: s.id,
+    student_id: req.user.sub,
+    checked_in_at: now,
+    status: decision.status,
+    verification_meta: {
+      ...req.body.verification_meta,
+      reason_code: decision.reasonCode,
+      anomalies: decision.anomalies,
+      distance_meters: decision.distanceMeters || null,
+      fingerprint: req.body.fingerprint || null,
+      biometric_result: req.body.biometric_result || null
+    },
+    location_snapshot: req.body.location || null
+  });
   res.status(201).json(rec);
 });
 
