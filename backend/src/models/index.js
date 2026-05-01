@@ -42,7 +42,15 @@ const ClassSession = sequelize.define('class_sessions', {
   ends_at: DataTypes.DATE,
   status: { type: DataTypes.ENUM('scheduled', 'open', 'closed'), defaultValue: 'scheduled' },
   one_time_token: DataTypes.STRING,
+  token_expires_at: DataTypes.DATE,
+  location_lat: DataTypes.FLOAT,
+  location_lng: DataTypes.FLOAT,
+  allowed_radius_meters: { type: DataTypes.INTEGER, defaultValue: 100 },
+  geo_required: { type: DataTypes.BOOLEAN, defaultValue: true },
+  opens_at: DataTypes.DATE,
+  closes_at: DataTypes.DATE,
   grace_minutes: { type: DataTypes.INTEGER, defaultValue: 10 },
+  expected_device_signal_id: DataTypes.STRING,
   recurring_rule: DataTypes.STRING,
 }, { underscored: true });
 
