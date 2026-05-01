@@ -1,0 +1,8 @@
+{
+  "app": { "title": "Class Check-In" },
+  "nav": {
+    "home": "Home",
+    "reports": "Reports",
+    "logout": "Logout"
+  }
+}
