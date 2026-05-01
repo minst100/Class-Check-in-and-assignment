@@ -26,6 +26,8 @@ const Class = sequelize.define('classes', {
   status: { type: DataTypes.ENUM('active', 'archived'), defaultValue: 'active' },
   archived_at: DataTypes.DATE,
   teacher_id: DataTypes.UUID,
+  department: DataTypes.STRING,
+  campus: DataTypes.STRING,
 }, { underscored: true });
 
 const Enrollment = sequelize.define('enrollments', {

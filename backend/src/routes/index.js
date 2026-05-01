@@ -10,6 +10,43 @@ const { NOTIFICATION_EVENTS } = require('../notifications/constants');
 
 const router = express.Router();
 
+
+const { Op } = require('sequelize');
+
+const ATTENDANCE_STATUSES = ['present', 'late', 'absent', 'excused'];
+
+function bucketStatusCounts(records) {
+  const counts = ATTENDANCE_STATUSES.reduce((acc, status) => ({ ...acc, [status]: 0 }), {});
+  records.forEach((record) => {
+    counts[record.status] = (counts[record.status] || 0) + 1;
+  });
+  return counts;
+}
+
+function calculateAttendanceRate(records) {
+  if (!records.length) return 0;
+  const attended = records.filter((record) => ['present', 'late', 'excused'].includes(record.status)).length;
+  return Number(((attended / records.length) * 100).toFixed(2));
+}
+
+function groupBy(records, keyGetter) {
+  return records.reduce((acc, item) => {
+    const key = keyGetter(item);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+}
+
+function toCsv(headers, rows) {
+  const lines = [headers.join(',')];
+  rows.forEach((row) => {
+    lines.push(headers.map((header) => JSON.stringify(row[header] ?? '')).join(','));
+  });
+  return lines.join('\n');
+}
+
+
 router.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ where: { email } });
@@ -162,6 +199,124 @@ router.put('/users/:id/notification-preferences', auth, async (req, res) => {
 router.get('/users/:id/notification-preferences', auth, async (req, res) => {
   if (req.user.sub !== req.params.id && req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   res.json(await NotificationPreference.findAll({ where: { user_id: req.params.id }, order: [['priority', 'ASC']] }));
+});
+
+
+router.get('/analytics/teacher/classes/:classId', auth, authorize('teacher', 'admin'), async (req, res) => {
+  const sessions = await ClassSession.findAll({ where: { class_id: req.params.classId }, order: [['starts_at', 'ASC']] });
+  const records = await AttendanceRecord.findAll({ include: [{ model: ClassSession, where: { class_id: req.params.classId } }] });
+  const counts = bucketStatusCounts(records);
+  const trend = sessions.map((session) => {
+    const sessionRecords = records.filter((record) => record.class_session_id === session.id);
+    return {
+      session_id: session.id,
+      starts_at: session.starts_at,
+      attendance_rate: calculateAttendanceRate(sessionRecords),
+      ...bucketStatusCounts(sessionRecords)
+    };
+  });
+
+  res.json({ class_id: req.params.classId, attendance_rate: calculateAttendanceRate(records), counts, trend });
+});
+
+router.get('/analytics/student/:studentId', auth, authorize('student', 'teacher', 'admin'), async (req, res) => {
+  if (req.user.role === 'student' && req.user.sub !== req.params.studentId) return res.status(403).json({ error: 'Forbidden' });
+  const records = await AttendanceRecord.findAll({ where: { student_id: req.params.studentId }, include: [{ model: ClassSession }], order: [['checked_in_at', 'ASC']] });
+  const timeline = records.map((record) => ({
+    class_session_id: record.class_session_id,
+    class_id: record.class_session?.class_id || null,
+    checked_in_at: record.checked_in_at,
+    status: record.status
+  }));
+  res.json({ student_id: req.params.studentId, attendance_percentage: calculateAttendanceRate(records), timeline });
+});
+
+router.get('/analytics/admin/overview', auth, authorize('admin'), async (req, res) => {
+  const classes = await Class.findAll();
+  const records = await AttendanceRecord.findAll({ include: [{ model: ClassSession, include: [{ model: Class }] }] });
+
+  const byClass = classes.map((klass) => {
+    const classRecords = records.filter((record) => record.class_session?.class_id === klass.id);
+    return { class_id: klass.id, class_name: klass.name, campus: klass.campus || 'unknown', department: klass.department || 'unknown', attendance_rate: calculateAttendanceRate(classRecords), ...bucketStatusCounts(classRecords) };
+  });
+
+  const byDepartment = Object.entries(groupBy(byClass, (item) => item.department)).map(([department, rows]) => ({
+    department,
+    classes: rows.length,
+    avg_attendance_rate: Number((rows.reduce((sum, row) => sum + row.attendance_rate, 0) / (rows.length || 1)).toFixed(2))
+  }));
+
+  const byCampus = Object.entries(groupBy(byClass, (item) => item.campus)).map(([campus, rows]) => ({
+    campus,
+    classes: rows.length,
+    avg_attendance_rate: Number((rows.reduce((sum, row) => sum + row.attendance_rate, 0) / (rows.length || 1)).toFixed(2))
+  }));
+
+  res.json({ by_class: byClass, by_department: byDepartment, by_campus: byCampus });
+});
+
+router.get('/analytics/at-risk', auth, authorize('admin', 'teacher'), async (req, res) => {
+  const threshold = Number(req.query.threshold || 75);
+  const students = await User.findAll({ where: { role: 'student' } });
+  const records = await AttendanceRecord.findAll({ include: [{ model: ClassSession }] });
+
+  const alerts = students.map((student) => {
+    const studentRecords = records.filter((record) => record.student_id === student.id);
+    return { student_id: student.id, student_name: student.name || student.email, attendance_percentage: calculateAttendanceRate(studentRecords) };
+  }).filter((row) => row.attendance_percentage < threshold);
+
+  res.json({ threshold, alerts });
+});
+
+router.get('/reports/export', auth, authorize('admin', 'teacher'), async (req, res) => {
+  const format = req.query.format === 'pdf' ? 'pdf' : 'csv';
+  const period = req.query.period === 'monthly' ? 'monthly' : 'weekly';
+  const days = period === 'monthly' ? 30 : 7;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const records = await AttendanceRecord.findAll({ where: { created_at: { [Op.gte]: since } }, include: [{ model: ClassSession }] });
+
+  const rows = records.map((record) => ({
+    record_id: record.id,
+    class_id: record.class_session?.class_id || '',
+    student_id: record.student_id,
+    status: record.status,
+    checked_in_at: record.checked_in_at
+  }));
+
+  if (format === 'csv') {
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance-${period}.csv`);
+    return res.send(toCsv(['record_id', 'class_id', 'student_id', 'status', 'checked_in_at'], rows));
+  }
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename=attendance-${period}.pdf`);
+  return res.send(Buffer.from(`Attendance ${period} report
+
+${JSON.stringify(rows, null, 2)}`));
+});
+
+router.get('/sessions/:id/live-feed', auth, authorize('admin', 'teacher'), async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  let active = true;
+  req.on('close', () => { active = false; });
+
+  while (active) {
+    const records = await AttendanceRecord.findAll({ where: { class_session_id: req.params.id } });
+    const payload = {
+      session_id: req.params.id,
+      total_check_ins: records.length,
+      counts: bucketStatusCounts(records),
+      attendance_rate: calculateAttendanceRate(records),
+      timestamp: new Date().toISOString()
+    };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
 });
 
 module.exports = router;
