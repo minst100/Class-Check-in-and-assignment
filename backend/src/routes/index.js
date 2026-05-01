@@ -341,6 +341,52 @@ router.get('/sessions/:id/live-feed', auth, authorize('admin', 'teacher'), async
   }
 });
 
+router.get('/sessions/:id/dashboard-summary', auth, authorize('admin', 'teacher'), async (req, res) => {
+  const session = await ClassSession.findByPk(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  const klass = await Class.findByPk(session.class_id);
+  const enrollments = await Enrollment.findAll({
+    where: { class_id: session.class_id },
+    include: [{ model: User, as: 'student', attributes: ['id', 'name', 'email'] }]
+  });
+
+  const records = await AttendanceRecord.findAll({ where: { class_session_id: session.id } });
+  const recordByStudent = new Map(records.map((record) => [record.student_id, record]));
+
+  const roster = enrollments.map((enrollment) => {
+    const record = recordByStudent.get(enrollment.student_id);
+    return {
+      student_id: enrollment.student_id,
+      student_name: enrollment.student?.name || enrollment.student?.email || 'Unknown student',
+      checked_in: Boolean(record),
+      status: record?.status || 'pending',
+      checked_in_at: record?.checked_in_at || null
+    };
+  });
+
+  const checkedInCount = roster.filter((student) => student.checked_in).length;
+
+  return res.json({
+    session: {
+      id: session.id,
+      class_id: session.class_id,
+      starts_at: session.starts_at,
+      ends_at: session.ends_at,
+      location_lat: session.location_lat,
+      location_lng: session.location_lng,
+      allowed_radius_meters: session.allowed_radius_meters
+    },
+    class: klass ? { id: klass.id, name: klass.name } : null,
+    completion: {
+      checked_in: checkedInCount,
+      total_students: roster.length,
+      completion_rate: roster.length ? Number(((checkedInCount / roster.length) * 100).toFixed(2)) : 0
+    },
+    roster
+  });
+});
+
 
 
 router.post('/compliance/consents', auth, requireFields(['consent_type', 'granted']), async (req, res) => {
