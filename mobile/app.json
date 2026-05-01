@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Class Check-in Mobile",
+    "slug": "class-checkin-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "permissions": ["ACCESS_FINE_LOCATION", "CAMERA"]
+    },
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Location is captured once during check-in.",
+        "NSCameraUsageDescription": "Camera is used to scan QR tokens for attendance."
+      }
+    }
+  }
+}
