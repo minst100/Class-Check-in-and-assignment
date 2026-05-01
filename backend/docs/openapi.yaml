@@ -1,0 +1,107 @@
+openapi: 3.0.3
+info:
+  title: Class Check-in Backend API
+  version: 1.0.0
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Role:
+      type: string
+      enum: [admin, teacher, student, parent]
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: JWT login (OAuth2-compatible bearer issuance)
+      responses: { '200': { description: OK } }
+  /users:
+    post:
+      security: []
+      summary: Register user
+      responses: { '201': { description: Created } }
+  /classes:
+    get:
+      summary: List classes
+      x-roles: [admin, teacher, student, parent]
+      responses: { '200': { description: OK } }
+    post:
+      summary: Create class
+      x-roles: [admin, teacher]
+      responses: { '201': { description: Created } }
+  /classes/{id}:
+    patch:
+      summary: Update class
+      x-roles: [admin, teacher]
+      responses: { '200': { description: OK } }
+    delete:
+      summary: Delete class
+      x-roles: [admin]
+      responses: { '204': { description: Deleted } }
+  /classes/{id}/roster:
+    post:
+      summary: Add student/parent enrollment
+      x-roles: [admin, teacher]
+      responses: { '201': { description: Created } }
+  /classes/{id}/archive:
+    post:
+      summary: Archive at semester end
+      x-roles: [admin]
+      responses: { '200': { description: OK } }
+  /classes/{id}/sessions/recurring:
+    post:
+      summary: Create recurring session template
+      x-roles: [admin, teacher]
+      responses: { '201': { description: Created } }
+  /sessions/{id}/open:
+    post:
+      summary: Open check-in and generate one-time token/QR session ID
+      x-roles: [admin, teacher]
+      responses: { '200': { description: OK } }
+  /sessions/{id}/close:
+    post:
+      summary: Close check-in session
+      x-roles: [admin, teacher]
+      responses: { '200': { description: OK } }
+  /sessions/{id}/check-in:
+    post:
+      summary: Student check-in with timestamp and verification metadata
+      x-roles: [student]
+      responses: { '201': { description: Created } }
+  /leave-requests:
+    post:
+      summary: Submit leave request
+      x-roles: [student]
+      responses: { '201': { description: Created } }
+  /leave-requests/{id}/review:
+    post:
+      summary: Approve/deny leave request with audit trail
+      x-roles: [admin, teacher]
+      responses: { '200': { description: OK } }
+  /classes/{id}/attendance-summary:
+    get:
+      summary: Attendance percentages
+      x-roles: [admin, teacher]
+      responses: { '200': { description: OK } }
+  /classes/{id}/attendance-weight:
+    post:
+      summary: Set attendance grade weighting
+      x-roles: [admin, teacher]
+      responses: { '201': { description: Created } }
+  /classes/{id}/grade-contribution/{studentId}:
+    get:
+      summary: Grade contribution from attendance
+      x-roles: [admin, teacher, student]
+      responses: { '200': { description: OK } }
+  /retention/run:
+    post:
+      summary: Retention policy hook to remove stale location/biometric artifacts
+      x-roles: [admin]
+      responses: { '200': { description: OK } }
