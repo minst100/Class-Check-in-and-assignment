@@ -1,14 +1,37 @@
+import { useState } from 'react';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+
 export default function ReportsPage() {
-  const triggerDownload = (name) => alert(`Download triggered: ${name}`);
+  const [period, setPeriod] = useState('weekly');
+
+  const triggerDownload = async (format) => {
+    const response = await fetch(`${BASE_URL}/reports/export?period=${period}&format=${format}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || ''}` }
+    });
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `attendance-${period}.${format}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <section className="card">
       <h2>Reporting</h2>
-      <p>Export attendance and grade-related reports.</p>
+      <p>Export attendance analytics for weekly or monthly periods.</p>
+      <label>
+        Period:&nbsp;
+        <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </label>
       <div className="stack">
-        <button onClick={() => triggerDownload('attendance.csv')}>Download Attendance CSV</button>
-        <button onClick={() => triggerDownload('attendance.pdf')}>Download Attendance PDF</button>
-        <button onClick={() => triggerDownload('grade-impact.csv')}>Download Grade Impact CSV</button>
-        <button onClick={() => triggerDownload('grade-impact.pdf')}>Download Grade Impact PDF</button>
+        <button onClick={() => triggerDownload('csv')}>Download Attendance CSV</button>
+        <button onClick={() => triggerDownload('pdf')}>Download Attendance PDF</button>
       </div>
     </section>
   );

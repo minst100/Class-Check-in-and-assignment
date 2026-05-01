@@ -1,4 +1,20 @@
+import { useEffect, useState } from 'react';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+
 export default function TeacherDashboard() {
+  const [sessionId, setSessionId] = useState('');
+  const [live, setLive] = useState(null);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    const source = new EventSource(`${BASE_URL}/sessions/${sessionId}/live-feed`);
+    source.onmessage = (event) => {
+      setLive(JSON.parse(event.data));
+    };
+    return () => source.close();
+  }, [sessionId]);
+
   return (
     <div className="grid">
       <section className="card"><h3>Class Creation & Scheduling</h3><p>Create classes, assign rooms, and set recurring schedules.</p></section>
@@ -7,6 +23,11 @@ export default function TeacherDashboard() {
       <section className="card"><h3>Attendance Overrides</h3><p>Mark late/excused/absent with rationale and audit note.</p></section>
       <section className="card"><h3>Leave Approval Queue</h3><p>Approve/deny student leave requests with comments.</p></section>
       <section className="card"><h3>Analytics Dashboard</h3><p>Attendance trends, no-show alerts, and engagement snapshots.</p></section>
+      <section className="card">
+        <h3>Real-time Monitor</h3>
+        <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} placeholder="Class session ID" />
+        {live && <pre>{JSON.stringify(live, null, 2)}</pre>}
+      </section>
     </div>
   );
 }
