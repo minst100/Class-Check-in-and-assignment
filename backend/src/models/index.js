@@ -116,6 +116,16 @@ const NotificationPreference = sequelize.define('notification_preferences', {
   priority: { type: DataTypes.INTEGER, defaultValue: 1 },
 }, { underscored: true });
 
+
+const ConsentRecord = sequelize.define('consent_records', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  user_id: DataTypes.UUID,
+  consent_type: { type: DataTypes.ENUM('location', 'camera'), allowNull: false },
+  granted: { type: DataTypes.BOOLEAN, allowNull: false },
+  captured_at: DataTypes.DATE,
+  metadata: DataTypes.JSON,
+}, { underscored: true });
+
 const AuditLog = sequelize.define('audit_logs', {
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   actor_user_id: DataTypes.UUID,
@@ -141,5 +151,6 @@ LeaveRequest.belongsTo(User, { foreignKey: 'student_id', as: 'student' });
 GuardianLink.belongsTo(User, { foreignKey: 'student_id', as: 'student' });
 GuardianLink.belongsTo(User, { foreignKey: 'guardian_id', as: 'guardian' });
 NotificationPreference.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+ConsentRecord.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
-module.exports = { sequelize, User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, Notification, GuardianLink, NotificationPreference, AuditLog };
+module.exports = { sequelize, User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, Notification, GuardianLink, NotificationPreference, ConsentRecord, AuditLog };

@@ -1,14 +1,19 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { auth, authorize } = require('../middleware/auth');
-const { User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, GuardianLink, NotificationPreference } = require('../models');
+const { auth, authorize, issueTokens } = require('../middleware/auth');
+const { User, Class, Enrollment, ClassSession, AttendanceRecord, LeaveRequest, AttendanceWeight, GuardianLink, NotificationPreference, ConsentRecord } = require('../models');
 const { logAction } = require('../services/audit');
 const { signSessionToken } = require('../verification/token');
 const { verifyCheckIn, auditVerificationDecision } = require('../verification');
 const { queueAndDeliver } = require('../notifications');
 const { NOTIFICATION_EVENTS } = require('../notifications/constants');
 
+const { requireFields, sanitizeStringFields } = require('../middleware/validation');
+const { recordMetric, snapshot } = require('../services/metrics');
+const { auditRequest } = require('../middleware/audit');
+
 const router = express.Router();
+router.use(auditRequest());
 
 
 const { Op } = require('sequelize');
@@ -51,11 +56,24 @@ router.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ where: { email } });
   if (!user || !(await user.comparePassword(password))) return res.status(401).json({ error: 'Invalid credentials' });
-  const token = jwt.sign({ sub: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET || 'dev-secret', { expiresIn: '8h' });
-  return res.json({ access_token: token, token_type: 'Bearer' });
+  const tokens = issueTokens(user);
+  return res.json({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken, token_type: 'Bearer' });
 });
 
-router.post('/users', async (req, res) => {
+router.post('/auth/refresh', async (req, res) => {
+  try {
+    const payload = jwt.verify(req.body.refresh_token, process.env.JWT_SECRET || 'dev-secret');
+    if (payload.type !== 'refresh') return res.status(401).json({ error: 'Invalid refresh token' });
+    const user = await User.findByPk(payload.sub);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const tokens = issueTokens(user);
+    return res.json({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken, token_type: 'Bearer' });
+  } catch {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+});
+
+router.post('/users', sanitizeStringFields(['name','email']), requireFields(['email','password','role']), async (req, res) => {
   const user = User.build(req.body); await user.setPassword(req.body.password); await user.save(); res.status(201).json(user);
 });
 
@@ -95,6 +113,7 @@ router.post('/sessions/:id/open', auth, authorize('admin', 'teacher'), async (re
 router.post('/sessions/:id/close', auth, authorize('admin', 'teacher'), async (req, res) => { const s = await ClassSession.findByPk(req.params.id); await s.update({ status: 'closed' }); await logAction(req.user.sub, 'session_close', 'class_session', s.id); res.json(s); });
 
 router.post('/sessions/:id/check-in', auth, authorize('student'), async (req, res) => {
+  const checkInStart = Date.now();
   const s = await ClassSession.findByPk(req.params.id);
   const now = new Date();
   const decision = await verifyCheckIn({
@@ -139,6 +158,7 @@ router.post('/sessions/:id/check-in', auth, authorize('student'), async (req, re
       placeholders: { student_name: req.user.email, status: rec.status, class_name: 'Your class session', date: now.toLocaleDateString(), time: now.toLocaleTimeString(), teacher_contact: 'Teacher via portal' }
     });
   }
+  recordMetric('checkInLatencyMs', Date.now() - checkInStart);
   res.status(201).json(rec);
 });
 
@@ -232,6 +252,7 @@ router.get('/analytics/student/:studentId', auth, authorize('student', 'teacher'
 });
 
 router.get('/analytics/admin/overview', auth, authorize('admin'), async (req, res) => {
+  const dashboardStart = Date.now();
   const classes = await Class.findAll();
   const records = await AttendanceRecord.findAll({ include: [{ model: ClassSession, include: [{ model: Class }] }] });
 
@@ -252,6 +273,7 @@ router.get('/analytics/admin/overview', auth, authorize('admin'), async (req, re
     avg_attendance_rate: Number((rows.reduce((sum, row) => sum + row.attendance_rate, 0) / (rows.length || 1)).toFixed(2))
   }));
 
+  recordMetric('dashboardLoadMs', Date.now() - dashboardStart);
   res.json({ by_class: byClass, by_department: byDepartment, by_campus: byCampus });
 });
 
@@ -317,6 +339,40 @@ router.get('/sessions/:id/live-feed', auth, authorize('admin', 'teacher'), async
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
+});
+
+
+
+router.post('/compliance/consents', auth, requireFields(['consent_type', 'granted']), async (req, res) => {
+  if (!['location', 'camera'].includes(req.body.consent_type)) return res.status(400).json({ error: 'Invalid consent type' });
+  const consent = await ConsentRecord.create({
+    user_id: req.user.sub,
+    consent_type: req.body.consent_type,
+    granted: Boolean(req.body.granted),
+    captured_at: new Date(),
+    metadata: req.body.metadata || {}
+  });
+  res.status(201).json(consent);
+});
+
+router.get('/metrics/slo', auth, authorize('admin', 'teacher'), async (req, res) => {
+  res.json(snapshot());
+});
+
+router.post('/integrations/csv/import', auth, authorize('admin', 'teacher'), requireFields(['csv']), async (req, res) => {
+  const lines = req.body.csv.trim().split(/?
+/);
+  const headers = lines.shift().split(',').map((h) => h.trim());
+  const rows = lines.map((line) => Object.fromEntries(line.split(',').map((v, i) => [headers[i], v.trim()])));
+  res.json({ imported_rows: rows.length, headers, preview: rows.slice(0, 3) });
+});
+
+router.post('/integrations/lms-sync', auth, authorize('admin'), async (req, res) => {
+  res.json({ status: 'accepted', provider: req.body.provider || 'generic-lms', synced_at: new Date().toISOString() });
+});
+
+router.post('/integrations/sis-sync', auth, authorize('admin'), async (req, res) => {
+  res.json({ status: 'accepted', provider: req.body.provider || 'generic-sis', synced_at: new Date().toISOString() });
 });
 
 module.exports = router;
